@@ -88,8 +88,8 @@ class BlackjackTable:
         self.shoe = Shoe(num_decks=4)
         self.seats: list[PlayerSeat] = []
         self.dealer_hand: list[Card] = []
-        self.initial_player_hand: list[Card] = []
         self.phase: str = PHASE_WAITING
+        self.active_player_idx: int | None = None
         self.deadline: float = 0.0
 
     def add_player(self, username: str) -> tuple[bool, str]:
@@ -110,23 +110,30 @@ class BlackjackTable:
             if idx is None:
                 return
 
+            was_active = (self.phase == PHASE_PLAYER_TURNS and self.active_player_idx == idx)
             self.seats.pop(idx)
 
             if not self.seats:
                 self.phase = PHASE_WAITING
                 self.dealer_hand.clear()
-                self.initial_player_hand.clear()
+                self.active_player_idx = None
                 return
 
             if self.phase == PHASE_BETTING and all(p.status == "BET_PLACED" for p in self.seats):
                 self._deal_initial_cards()
-            elif self.phase == PHASE_PLAYER_TURNS:
-                self._check_all_players_done()
+                return
+
+            if self.phase == PHASE_PLAYER_TURNS:
+                if self.active_player_idx is not None and idx < self.active_player_idx:
+                    self.active_player_idx -= 1
+                if was_active and self.active_player_idx is not None:
+                    self.active_player_idx -= 1
+                    self._advance_turn()
 
     def _start_betting_phase(self) -> None:
         self.phase = PHASE_BETTING
         self.dealer_hand.clear()
-        self.initial_player_hand.clear()
+        self.active_player_idx = None
         for p in self.seats:
             p.bet = 0.0
             p.hand.clear()
@@ -152,22 +159,25 @@ class BlackjackTable:
                 return True, f"Postawiono {amount}."
 
             if self.phase == PHASE_PLAYER_TURNS:
-                if player.status != "PLAYING":
-                    return False, "Zakończyłeś już swoje decyzje w tym rozdaniu."
+                if self.active_player_idx is None or self.seats[self.active_player_idx].username != username:
+                    return False, "Teraz nie jest Twoja tura."
 
                 if move == MOVE_HIT:
                     player.hand.append(self.shoe.draw())
                     score = calculate_score(player.hand)
                     if score > 21:
                         player.status = "BUST"
+                        self._advance_turn()
                     elif score == 21:
                         player.status = "STOOD"
-                    self._check_all_players_done()
+                        self._advance_turn()
+                    else:
+                        self.deadline = time.time() + self.TURN_TIME
                     return True, "Dobrano kartę."
 
                 if move == MOVE_STAND:
                     player.status = "STOOD"
-                    self._check_all_players_done()
+                    self._advance_turn()
                     return True, "Pas (Stand)."
 
                 if move == MOVE_DOUBLE:
@@ -178,7 +188,7 @@ class BlackjackTable:
                     player.bet *= 2
                     player.hand.append(self.shoe.draw())
                     player.status = "BUST" if calculate_score(player.hand) > 21 else "STOOD"
-                    self._check_all_players_done()
+                    self._advance_turn()
                     return True, "Podwojono stawkę i dobrano 1 kartę."
 
             return False, "Niedozwolona akcja w obecnym momencie gry."
@@ -189,27 +199,32 @@ class BlackjackTable:
             self._start_betting_phase()
             return
 
-        # Krupier losuje jedną wspólną rękę dla graczy oraz jedną dla kasyna
-        self.initial_player_hand = [self.shoe.draw(), self.shoe.draw()]
-        self.dealer_hand = [self.shoe.draw(), self.shoe.draw()]
-
-        is_natural_bj = calculate_score(self.initial_player_hand) == 21
-
+        # Każdy gracz otrzymuje własne, niezależne 2 karty z buta
         for p in active_bettors:
-            p.hand = [Card(c.suit, c.rank) for c in self.initial_player_hand]
-            p.status = "BLACKJACK" if is_natural_bj else "PLAYING"
+            p.hand = [self.shoe.draw(), self.shoe.draw()]
+            p.status = "BLACKJACK" if calculate_score(p.hand) == 21 else "PLAYING"
 
+        self.dealer_hand = [self.shoe.draw(), self.shoe.draw()]
         self.phase = PHASE_PLAYER_TURNS
-        self.deadline = time.time() + self.TURN_TIME
-        self._check_all_players_done()
+        self.active_player_idx = -1
+        self._advance_turn()
 
-    def _check_all_players_done(self) -> None:
-        """Jeśli żaden gracz nie ma już statusu PLAYING, krupier od razu kończy rozdanie."""
-        if all(p.status != "PLAYING" for p in self.seats):
-            self._play_dealer_and_settle()
+    def _advance_turn(self) -> None:
+        if self.active_player_idx is None:
+            self.active_player_idx = -1
+
+        while True:
+            self.active_player_idx += 1
+            if self.active_player_idx >= len(self.seats):
+                self._play_dealer_and_settle()
+                return
+            if self.seats[self.active_player_idx].status == "PLAYING":
+                self.deadline = time.time() + self.TURN_TIME
+                return
 
     def _play_dealer_and_settle(self) -> None:
         self.phase = PHASE_PAYOUT
+        self.active_player_idx = None
 
         if any(p.status in ("STOOD", "BLACKJACK") for p in self.seats):
             while calculate_score(self.dealer_hand) < 17:
@@ -250,12 +265,10 @@ class BlackjackTable:
                 self._deal_initial_cards()
                 return True
 
-            if self.phase == PHASE_PLAYER_TURNS:
-                # Upłynęło 15s -> wszyscy niezdecydowani gracze automatycznie pasują
-                for p in self.seats:
-                    if p.status == "PLAYING":
-                        p.status = "STOOD"
-                self._play_dealer_and_settle()
+            if self.phase == PHASE_PLAYER_TURNS and self.active_player_idx is not None:
+                # Koniec czasu tury aktywnego gracza -> automatyczny PASS
+                self.seats[self.active_player_idx].status = "STOOD"
+                self._advance_turn()
                 return True
 
             if self.phase == PHASE_PAYOUT:
@@ -280,17 +293,20 @@ class BlackjackTable:
                 else calculate_score(self.dealer_hand)
             )
 
+            active_user = (
+                self.seats[self.active_player_idx].username
+                if self.phase == PHASE_PLAYER_TURNS and self.active_player_idx is not None
+                else None
+            )
+
             return {
                 "phase": self.phase,
-                "active_players": [p.username for p in self.seats if p.status == "PLAYING"],
+                "active_player": active_user,
+                "active_players": [active_user] if active_user else [],
                 "time_left": max(0, int(round(self.deadline - time.time()))),
                 "dealer": {
                     "cards": dealer_cards,
                     "score": dealer_points,
-                },
-                "initial_player_hand": {
-                    "cards": [c.to_dict() for c in self.initial_player_hand],
-                    "score": calculate_score(self.initial_player_hand),
                 },
                 "seats": [
                     {

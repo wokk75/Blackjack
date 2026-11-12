@@ -1,3 +1,4 @@
+import os
 import queue
 import sys
 import threading
@@ -22,6 +23,8 @@ from shared.protocol import (
 
 SUIT_SYMBOLS = {"H": "♥", "D": "♦", "C": "♣", "S": "♠", "?": "?"}
 
+def clear_console() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
 
 def format_cards(cards: list[dict]) -> str:
     if not cards:
@@ -42,6 +45,7 @@ def print_stats(stats: dict) -> None:
 
 
 def render_table(state: dict, my_username: str) -> None:
+    clear_console()
     phase = state["phase"]
     time_left = state["time_left"]
     dealer = state["dealer"]
