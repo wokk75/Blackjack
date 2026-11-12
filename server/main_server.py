@@ -192,8 +192,14 @@ class BlackjackServer:
         server_sock.bind((self.host, self.port))
         server_sock.listen()
         server_sock.settimeout(1.0)  # Umożliwia czyste zatrzymanie serwera przez Ctrl+C
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+        except OSError:
+            local_ip = "127.0.0.1"
 
-        print(f"=== SERWER BLACKJACK URUCHOMIONY NA {self.host}:{self.port} ===")
+        print(f"=== SERWER URUCHOMIONY | Lokalnie: 127.0.0.1:{self.port} | W sieci LAN: {local_ip}:{self.port} ===")
         threading.Thread(target=self._dealer_timer_loop, daemon=True).start()
 
         try:

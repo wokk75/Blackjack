@@ -16,6 +16,8 @@ from shared.protocol import (
     PHASE_PAYOUT,
     PHASE_PLAYER_TURNS,
     PHASE_WAITING,
+    HOST,
+    PORT
 )
 
 SUIT_SYMBOLS = {"H": "♥", "D": "♦", "C": "♣", "S": "♠", "?": "?"}
@@ -135,7 +137,16 @@ def listener_worker(client: NetworkClient, username: str, stop_event: threading.
 
 
 def main() -> None:
-    client = NetworkClient()
+    raw_addr = input(f"Podaj adres serwera (IP lub IP:PORT) [Enter = {HOST}:{PORT}]: ").strip()
+    if not raw_addr:
+        host, port = HOST, PORT
+    elif ":" in raw_addr:
+        host, port_str = raw_addr.split(":", 1)
+        port = int(port_str)
+    else:
+        host, port = raw_addr, PORT
+
+    client = NetworkClient(host=host, port=port)
     ok, info = client.connect()
     print(info)
     if not ok:

@@ -1,6 +1,6 @@
 import json
 
-HOST = "127.0.0.1"  # Localhost do testów na jednym komputerze
+HOST = "0.0.0.0"  # Localhost do testów na jednym komputerze
 PORT = 5555
 ENCODING = "utf-8"
 
